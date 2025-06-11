@@ -8,7 +8,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 
-from excell.extract_and_split_template import main
+from extract_and_split_template import main
 
 st.title("Excel 智能提取 & 性别拆分")
 
