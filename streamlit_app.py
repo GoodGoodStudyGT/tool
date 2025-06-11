@@ -46,8 +46,9 @@ def detect_column_by_pattern(df: pd.DataFrame, pattern: str, threshold: float = 
     regex = re.compile(pattern)
     for col in df.columns:
         s = df[col].dropna().astype(str)
-        if len(s)==0: continue
-        if s.str.match(regex).sum()/len(s) >= threshold:
+        if len(s) == 0:
+            continue
+        if s.str.match(regex).sum() / len(s) >= threshold:
             return col
     return None
 
@@ -59,26 +60,34 @@ def read_source(path: str) -> pd.DataFrame:
 
 
 def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
+    # 基于列名的初始映射，包含新增字段
     mapping = {
         '姓名': ['姓名','name','Name','参检人'],
         '证件号': ['证件号','身份证号','IDNumber'],
-        '手机号': ['手机号','电话','mobile','Mobile']
+        '手机号': ['手机号','电话','mobile','Mobile'],
+        '所属组织/部门': ['所属组织/部门','部门','组织','组织/部门'],
+        '体检卡号': ['体检卡号','卡号','体检卡号']
     }
     data = {}
-    for k,cands in mapping.items():
+    for k, cands in mapping.items():
         col = next((c for c in cands if c in df.columns), None)
-        data[k] = df[col].astype(str) if col else pd.Series(['']*len(df), index=df.index)
-    # 模式补全
+        data[k] = df[col].astype(str) if col else pd.Series([''] * len(df), index=df.index)
+
+    # 模式补全：姓名、证件号、手机号
     if data['证件号'].eq('').all():
-        c=detect_column_by_pattern(df,r"^\d{17}[\dXx]$")
-        if c: data['证件号']=df[c].astype(str)
+        c = detect_column_by_pattern(df, r"^\d{17}[\dXx]$")
+        if c:
+            data['证件号'] = df[c].astype(str)
     if data['手机号'].eq('').all():
-        c=detect_column_by_pattern(df,r"^1[3-9]\d{9}$")
-        if c: data['手机号']=df[c].astype(str)
+        c = detect_column_by_pattern(df, r"^1[3-9]\d{9}$")
+        if c:
+            data['手机号'] = df[c].astype(str)
     if data['姓名'].eq('').all():
-        c=detect_column_by_pattern(df,r"^[\u4e00-\u9fa5]{2,4}$")
-        if c: data['姓名']=df[c].astype(str)
-    # 填类型 & 性别
+        c = detect_column_by_pattern(df, r"^[\u4e00-\u9fa5]{2,4}$")
+        if c:
+            data['姓名'] = df[c].astype(str)
+
+    # 构造 DataFrame 并添加证件类型、性别
     df_out = pd.DataFrame(data)
     df_out['证件类型'] = df_out['证件号'].apply(parse_doc_type)
     df_out['性别'] = df_out['证件号'].apply(parse_gender)
@@ -86,40 +95,53 @@ def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
 
 # --------- Streamlit 前端 ---------
 st.title("📑 Excel 智能提取 & 性别拆分 工具")
-
-st.markdown("上传一个含“姓名”、“证件号”、“手机号”的 Excel，自动识别表头，多表头也支持。处理后按性别拆分并打包下载。")
+st.markdown("上传一个含“姓名”、“证件号”、“手机号”等字段的 Excel，自动识别表头，多表头也支持。处理后按性别拆分并打包下载。结果表列顺序固定，表头不变。")
 
 src_file = st.file_uploader("上传待处理Excel", type=["xls","xlsx"] )
 tpl_file = st.file_uploader("上传模板文件（可选）", type=["xls","xlsx"] )
 
+def reorder_columns(df: pd.DataFrame, cols_order: list) -> pd.DataFrame:
+    # 只保留需展示的列并按指定顺序排列
+    return df.reindex(columns=cols_order, fill_value='')
+
+# 指定默认列顺序
+DEFAULT_COLS = ['姓名', '证件类型', '证件号', '手机号', '所属组织/部门', '体检卡号']
+
 if src_file:
     tmpdir = tempfile.mkdtemp()
+    # 保存上传的源文件
     src_path = os.path.join(tmpdir, src_file.name)
-    with open(src_path,"wb") as f: f.write(src_file.getbuffer())
+    with open(src_path, "wb") as f:
+        f.write(src_file.getbuffer())
     tpl_path = None
     if tpl_file:
         tpl_path = os.path.join(tmpdir, tpl_file.name)
-        with open(tpl_path,"wb") as f: f.write(tpl_file.getbuffer())
-    # 提取
+        with open(tpl_path, "wb") as f:
+            f.write(tpl_file.getbuffer())
+
+    # 提取并拆分
     df = read_source(src_path)
     df_all = extract_fields(df)
-    male = df_all[df_all['性别']=='男'].drop(columns=['性别'])
-    female = df_all[df_all['性别']=='女'].drop(columns=['性别'])
-    # 按模板顺序
+    # 重排序列
     if tpl_path:
-        tmp = pd.read_excel(tpl_path, nrows=0)
-        cols = tmp.columns.tolist()
-        male = male.reindex(columns=cols, fill_value='')
-        female = female.reindex(columns=cols, fill_value='')
-    # 写文件
-    outdir = os.path.join(tmpdir,'out')
-    os.makedirs(outdir,exist_ok=True)
-    m_path = os.path.join(outdir,'male.xlsx')
-    f_path = os.path.join(outdir,'female.xlsx')
-    male.to_excel(m_path,index=False)
-    female.to_excel(f_path,index=False)
+        # 按模板表头顺序
+        tpl_cols = pd.read_excel(tpl_path, nrows=0).columns.tolist()
+        male_df = reorder_columns(df_all[df_all['性别']=='男'].drop(columns=['性别']), tpl_cols)
+        female_df = reorder_columns(df_all[df_all['性别']=='女'].drop(columns=['性别']), tpl_cols)
+    else:
+        male_df = reorder_columns(df_all[df_all['性别']=='男'].drop(columns=['性别']), DEFAULT_COLS)
+        female_df = reorder_columns(df_all[df_all['性别']=='女'].drop(columns=['性别']), DEFAULT_COLS)
+
+    # 写入文件
+    outdir = os.path.join(tmpdir, 'out')
+    os.makedirs(outdir, exist_ok=True)
+    m_path = os.path.join(outdir, 'male.xlsx')
+    f_path = os.path.join(outdir, 'female.xlsx')
+    male_df.to_excel(m_path, index=False)
+    female_df.to_excel(f_path, index=False)
+
     # 打包下载
-    zipname = os.path.join(tmpdir,'result')
-    shutil.make_archive(zipname,'zip',outdir)
-    with open(zipname+ '.zip','rb') as fp:
+    zipname = os.path.join(tmpdir, 'result')
+    shutil.make_archive(zipname, 'zip', outdir)
+    with open(zipname + '.zip', 'rb') as fp:
         st.download_button("⬇️ 下载结果 (ZIP)", fp, file_name="result.zip")
