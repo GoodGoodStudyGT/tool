@@ -2,6 +2,12 @@ import streamlit as st
 import tempfile
 import shutil
 import os
+
+import sys, os
+# 假设 streamlit_app.py 和 excell/ 在同一目录
+sys.path.insert(0, os.path.dirname(__file__))
+
+
 from excell.extract_and_split_template import main
 
 st.title("Excel 智能提取 & 性别拆分")
